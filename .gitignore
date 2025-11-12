@@ -1,0 +1,39 @@
+
+# -------------------- Entornos Virtuales --------------------
+# Directorios comunes de entornos virtuales
+venv
+.venv
+env
+/bin
+/include
+/lib
+/lib64
+/pyvenv.cfg
+/share
+
+# -------------------- Dependencias Python --------------------
+__pycache__
+*.pyc
+*.pyd
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# -------------------- Herramientas de Desarrollo/IDE --------------------
+.vscode/  # Ignorar configuraciones de VS Code
+.idea/    # Ignorar configuraciones de PyCharm/IntelliJ
+
+# -------------------- Logs y Temporales --------------------
+*.log
+*.sqlite3
+tmp/
+
+# -------------------- Data y Salidas --------------------
+# MUY IMPORTANTE: Ignorar los archivos de datos que serán generados localmente
+smartfloors_data.csv 
+
+# -------------------- Streamlit / Plotly --------------------
+# Archivos de caché generados por Streamlit
+.streamlit/
