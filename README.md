@@ -47,6 +47,8 @@ venv\Scripts\activate
 
 pip install -r requirements.txt
 
+## -->En caso de instalar nuevas depencias, para actualizar el requiremnts
+
 ##para saber las librerias installadas
 pip list
 
