@@ -38,19 +38,3 @@ Asegúrese de tener Python (3.7+) instalado y las siguientes librerías:
 
 ```bash
 pip install pandas numpy streamlit plotly
-
-## 4. Para crear y activar el entorno virtual
-cd hacklathon
-python -m venv venv
-# Windows
-venv\Scripts\activate
-
-pip install -r requirements.txt
-
-## -->En caso de instalar nuevas depencias, para actualizar el requiremnts
-
-##para saber las librerias installadas
-pip list
-
-##para exportar a un archivos requirements.txt
-pip freeze > requirements.txt

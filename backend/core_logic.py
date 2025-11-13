@@ -1,15 +1,26 @@
 # =========================================================
-# MÓDULO: core_logic.py (BACKEND)
-# Propósito: Ingesta, Predicción y Generación de Alertas.
+# MÓDULO: core_logic.py (BACKEND - BUCLE CERRADO SIMULADO)
+# Propósito: Ingesta, Predicción, Generación de Alertas y Activación de Corrección.
 # =========================================================
 
 import pandas as pd
 import numpy as np
-import os # Necesario para la manipulación de rutas
-import sys # Necesario para determinar la ruta del script de Streamlit
+import os 
+import sys 
+import random
 
-# Importa las constantes y configuraciones del otro módulo
+# Importa las constantes y configuraciones
 from configuracion.config import UMBRALES, RECOMENDACIONES, WINDOWS_SIZE_MINUTES, PISOS_MONITOREADOS 
+
+# --- IMPOTACIÓN CRÍTICA DEL SIMULADOR PARA EL BUCLE CERRADO ---
+try:
+    # Ajusta el path para importar data_simulator.py (que está en la carpeta raíz)
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+    from data_simulator import system_correction_active 
+except ImportError:
+    # Modo seguro en caso de fallo de importación (la simulación de corrección no funcionará)
+    system_correction_active = {p: False for p in PISOS_MONITOREADOS} 
+    print("Advertencia: No se pudo enlazar la lógica de corrección con el simulador.")
 
 # ------------------- FUNCIONES DE INGESTA Y PRE-PROCESAMIENTO -------------------
 
@@ -18,39 +29,26 @@ def load_and_prepare_data(filepath='smartfloors_data.csv'):
     Función de Ingesta. Carga el CSV y prepara el DataFrame, usando una ruta robusta.
     """
     
-    # Método robusto para encontrar el archivo en la raíz del proyecto (hacklathon/),
-    # sin importar el directorio de trabajo.
     try:
-        # sys.argv[0] contiene la ruta del script de Streamlit ('Frontend/app/dashboard.py')
+        # Intenta determinar la ruta absoluta del archivo CSV.
         dashboard_path = os.path.dirname(os.path.abspath(sys.argv[0]))
-        # Retrocede dos niveles: /app -> /Frontend -> /hacklathon
         root_dir = os.path.abspath(os.path.join(dashboard_path, '..', '..'))
-        # Combina la raíz con el nombre del archivo
         full_path = os.path.join(root_dir, filepath)
     except IndexError:
-        # Caso de debug, si el script no fue ejecutado por Streamlit
         full_path = filepath
     
     try:
-        # Usar la ruta absoluta corregida
         df = pd.read_csv(full_path) 
-        
-        # Estas dos líneas son muy sensibles a datos incorrectos
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.set_index('timestamp')
         
-        # Asegurarse de que el DataFrame no esté vacío antes de continuar
         if df.empty:
-             print("Advertencia: DataFrame cargado está vacío.")
              return pd.DataFrame() 
 
         return df
     except FileNotFoundError:
-        # Notificar al usuario dónde se buscó el archivo
-        print(f"ERROR: Archivo de datos no encontrado. Se buscó en: {full_path}")
         return pd.DataFrame()
     except Exception as e:
-        print(f"ERROR: Fallo al procesar los datos en core_logic: {e}")
         return pd.DataFrame()
 
 # ------------------- FUNCIONES DE PREDICCIÓN (MVP SIMPLE) -------------------
@@ -60,9 +58,6 @@ def predict_60_min_ma(df, piso, variable):
     Calcula la predicción a +60 minutos usando Promedio Móvil simple (MVP).
     """
     df_floor = df[df['piso'] == piso]
-    
-    # Se usa la media de la última hora (60 registros) como predicción
-    # Si la data no tiene al menos 60 puntos, usamos todos los disponibles
     latest_data = df_floor[variable].tail(WINDOWS_SIZE_MINUTES)
     if latest_data.empty:
         return None
@@ -73,27 +68,34 @@ def predict_60_min_ma(df, piso, variable):
 
 # ------------------- FUNCIONES DE REGLAS DE NEGOCIO Y ALERTAS -------------------
 
-def _check_umbral(value, umbral_config):
+def _check_umbral(value, umbral_config, var_name): 
     """Función auxiliar para verificar si un valor cruza un umbral."""
     for level, limits in umbral_config.items():
-        if level in ['Media', 'Critica', 'Informativa']:
-            # Caso de Temperatura (solo 'min')
-            if 'min' in limits and value >= limits['min']:
+        
+        # 1. Variables con rangos (Temperatura, Humedad)
+        if isinstance(limits, dict): 
+            if var_name == 'temp_C' and 'min' in limits and value >= limits['min']:
                 return level
-            # Caso de Humedad (rango 'low' y 'high')
-            if 'low' in limits and 'high' in limits:
+            
+            elif var_name == 'humedad_pct' and 'low' in limits and 'high' in limits:
                 if value < limits['low'] or value > limits['high']:
                     return level
-        # Caso de Energía (umbral simple, no un diccionario)
-        elif isinstance(limits, float) and value >= limits:
+        
+        # 2. Variables con umbral simple flotante (Energía)
+        elif isinstance(limits, (float, int)) and value >= limits:
             return level
+            
     return None
 
 def generate_alerts(df):
     """
-    Función principal de Backend: genera todas las alertas del sistema.
+    Función principal de Backend: genera todas las alertas del sistema y 
+    activa la simulación de corrección si se detecta una CRÍTICA.
     """
+    global system_correction_active 
+    
     if df.empty:
+        # Si el input está vacío, retorna un DF vacío con columnas definidas
         return pd.DataFrame(columns=['timestamp', 'piso', 'variable', 'nivel', 'recomendacion', 'tipo'])
 
     alerts = []
@@ -103,20 +105,27 @@ def generate_alerts(df):
         latest_data = df[df['piso'] == piso].tail(1)
         if latest_data.empty: continue
         latest_data = latest_data.iloc[0]
+        
+        is_critical_alert = False
 
         # 1. Alertas por Condiciones Actuales (T, H, Energía)
-        # Temperatura y Humedad
-        for var in ['temp_C', 'humedad_pct']:
-            level = _check_umbral(latest_data[var], UMBRALES[var])
+        for var in ['temp_C', 'humedad_pct', 'energia_kW']:
+            level = _check_umbral(latest_data[var], UMBRALES[var], var)
+            
             if level:
-                # Determinar la clave de la recomendación (especial para humedad)
+                if level == 'Critica':
+                    is_critical_alert = True
+                
+                # Determinar la clave de la recomendación
                 rec_key = f'{var}_{level}'
-                if var == 'humedad_pct':
+                if var == 'humedad_pct' and level == 'Critica':
                     if latest_data[var] < UMBRALES['humedad_pct'][level]['low']:
-                        rec_key = f'humedad_pct_Critica_low' # Usamos Critica_low/high para los mensajes
+                        rec_key = f'humedad_pct_Critica_low'
                     elif latest_data[var] > UMBRALES['humedad_pct'][level]['high']:
                         rec_key = f'humedad_pct_Critica_high'
-                        
+                elif var == 'energia_kW':
+                    rec_key = f'energia_kW_Critica' 
+
                 alerts.append({
                     'timestamp': current_time,
                     'piso': piso,
@@ -151,8 +160,17 @@ def generate_alerts(df):
                 'recomendacion': RECOMENDACIONES['riesgo_combinado_Critica'].replace('Piso X', f'Piso {piso}'),
                 'tipo': 'Actual'
             })
-
-    return pd.DataFrame(alerts)
+             is_critical_alert = True 
+             
+        # --- FUNCIÓN DE NOTIFICACIÓN Y CORRECCIÓN (Simulación) ---
+        if is_critical_alert and not system_correction_active[piso]:
+             system_correction_active[piso] = True
+             print(f"*** ALERTA CRÍTICA DETECTADA en Piso {piso}. INICIANDO CORRECCIÓN SIMULADA ***")
+    
+    # --- CORRECCIÓN FINAL DEL ERROR ---
+    # Garantiza que el DataFrame de alertas siempre tenga las columnas necesarias, incluso si está vacío.
+    df_alerts = pd.DataFrame(alerts, columns=['timestamp', 'piso', 'variable', 'nivel', 'recomendacion', 'tipo'])
+    return df_alerts
 
 # ------------------- FUNCIONES DE INTERFAZ DE BACKEND -------------------
 
@@ -162,6 +180,7 @@ def get_floor_status(df_alerts, piso):
     """
     level_order = {'Crítica': 4, 'Preventiva Crítica': 3.5, 'Media': 3, 'Preventiva Media': 2.5, 'Informativa': 2, 'OK': 1}
     
+    # La columna 'piso' ahora está garantizada por la corrección en generate_alerts
     alerts_piso = df_alerts[df_alerts['piso'] == piso]
     
     if alerts_piso.empty:
@@ -177,7 +196,6 @@ def get_floor_status(df_alerts, piso):
             
     summary = ', '.join(alerts_piso['variable'].unique()) + ' fuera de rango.'
     
-    # Limpiar el nombre del nivel para la tarjeta (ej: quitar 'Preventiva')
     display_level = max_level.replace('Preventiva ', '') 
     
     return display_level, summary
